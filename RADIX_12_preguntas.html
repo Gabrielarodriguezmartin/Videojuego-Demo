@@ -893,6 +893,7 @@ function goTurn1(){
   h+='</div><div id="t1fb"></div>'+
     '<div class="bc"><button class="btn bp" onclick="saveTurn1()">Continuar a la Fase 2 →</button></div>';
   area().innerHTML=h;
+  radixRestaurarFormulario(G.turn);
 }
 
 function saveTurn1(){
@@ -1227,11 +1228,16 @@ function saveTurn4(){
   var rent4=parseFloat(el('f-rent4')&&el('f-rent4').value)||0;
   if(rent4>=0) G.monthlyRent=rent4;
   if(!G.locationType||!G.locationChoice){el('t4fb').innerHTML='<div class="al al-w"><span class="ai">⚠️</span>Selecciona tipo de presencia y elige un local.</div>';return;}
-  if(G.locationChoice==='A'){G.reformCost=0;G.bar+=3;G.decisions.push({t:4,txt:'Local céntrico: alta visibilidad',imp:3});}
-  else{G.reformCost=3000;G.decisions.push({t:4,txt:'Zona residencial: reforma 3.000 €',imp:0});}
-  var rc={completa:25000,parcial:8000,minima:1500,no:0};
-  if(G.locationChoice==='B'&&G.reformLevel!=='no')G.reformCost+=rc[G.reformLevel]||0;
-  else if(G.locationChoice==='A'&&G.reformLevel!=='no')G.reformCost=rc[G.reformLevel]||0;
+  if(radixModoAyuntamientoSolicitado()){
+    G.reformCost=G.reformCostInput;
+    G.decisions.push({t:4,txt:'Zona residencial: reforma '+fmt(G.reformCost)+' €',imp:0});
+  }else{
+    if(G.locationChoice==='A'){G.reformCost=0;G.bar+=3;G.decisions.push({t:4,txt:'Local céntrico: alta visibilidad',imp:3});}
+    else{G.reformCost=3000;G.decisions.push({t:4,txt:'Zona residencial: reforma 3.000 €',imp:0});}
+    var rc={completa:25000,parcial:8000,minima:1500,no:0};
+    if(G.locationChoice==='B'&&G.reformLevel!=='no')G.reformCost+=rc[G.reformLevel]||0;
+    else if(G.locationChoice==='A'&&G.reformLevel!=='no')G.reformCost=rc[G.reformLevel]||0;
+  }
   goTurn7();
   radixRestaurarFormulario(G.turn);
   radixAutoGuardarAhora();
@@ -1808,6 +1814,14 @@ function radixRestaurarFormulario(turn){
       if(e && typeof state.blocks[id]==='string') e.className=state.blocks[id];
     }
   }
+
+  if(radixModoAyuntamientoSolicitado()){
+    if(Number(turn)===5){if(el('empBox'))el('empBox').classList.remove('hidden');doSS();}
+    if(Number(turn)===6 && el('mktBudgetBox'))el('mktBudgetBox').style.display=G.doMarketing?'':'none';
+    if(Number(turn)===7){if(el('loanBox'))el('loanBox').classList.remove('hidden');doLoan();doTotal();}
+    if(Number(turn)===8)doCosts();
+    if(Number(turn)===9)doProj();
+  }
 }
 
 function radixEstadoGuardable(){
@@ -2220,8 +2234,11 @@ async function guardarPDFPlanFinal(){
 }
 
 function goPlanCanvas(){
+  var modoAyuntamiento=radixModoAyuntamientoSolicitado();
   G.planScreen='canvas';
-  G.turn=10;goTop();
+  G.turn=10;
+  if(modoAyuntamiento){refreshDash();radixActualizarCodigoUI();}
+  goTop();
   var tc=G.totalFixed||0,tv=G.totalVariable||0,ingr=G.monthlyRevenue||0,ben=G.monthlyProfit||0;
   var annualProfit=ben*12;
   if(G.monthlySales&&G.avgPrice){
@@ -2323,14 +2340,16 @@ function goPlanCanvas(){
   // BOTONES debajo del canvas
   '<div class="no-print" style="display:flex;justify-content:center;gap:10px;margin-top:20px">'+
     '<button class="btn bs" onclick="guardarPDFCanvas()">📄 Guardar PDF</button>'+
-    '<button class="btn bp" onclick="goSimIntro()">Continuar a simulación →</button>'+
+    (modoAyuntamiento
+      ? '<button class="btn bp" onclick="radixEmpezarAyuntamiento()">Empezar las 12 preguntas →</button>'
+      : '<button class="btn bp" onclick="goSimIntro()">Continuar a simulación →</button>')+
   '</div>'+
 
   // PIE
   '</div>';
 
   area().innerHTML=h;
-  setTimeout(function(){guardarPDFAutomatico('canvas','02_Business_Model_Canvas.pdf','landscape');},900);
+  if(!modoAyuntamiento)setTimeout(function(){guardarPDFAutomatico('canvas','02_Business_Model_Canvas.pdf','landscape');},900);
 }
 
 function cBlock(emoji,title,body,bg,col,tall){
@@ -19964,6 +19983,110 @@ var bancoPreguntas = [
 ];
 
 
+function radixModoAyuntamientoSolicitado() {
+    try {
+        return new URLSearchParams(window.location.search).get('modo') === 'ayuntamiento';
+    } catch (e) {
+        return /[?&]modo=ayuntamiento(?:&|$)/i.test(window.location.search || '');
+    }
+}
+
+function radixPrepararFormularioAyuntamiento() {
+    function campos(valores) {
+        var resultado = {};
+        Object.keys(valores).forEach(function (id) { resultado[id] = {value: String(valores[id])}; });
+        return resultado;
+    }
+    G._pageStates = {
+        '1': {fields: campos({'f-name':G.name,'f-gender':G.gender,'f-age':G.age,'f-edu':G.education,'f-exp':G.experience,'f-motiv':G.motivation}), options:{dafo0:'B',dafo1:'C',dafo2:'C',dafo3:'B',dafo4:'B'}},
+        '2': {fields: campos({'f-custom':G.bizName,'f-bizdesc':G.bizDesc,'f-need':G.marketNeed,'f-product':G.mainProduct,'f-obj':G.objective,'f-mission':G.mission,'f-vision':G.vision}), options:{bizType:G.bizType,legalForm:G.legalForm,sectorExp:'si',sectorTrain:'si'}},
+        '3': {fields: campos({'f-target':G.targetDesc,'f-tage':G.targetAge,'f-tneeds':G.targetNeeds}), options:{targetType:G.targetType,targetZone:G.targetZone,targetIncome:G.targetIncome,igEvent:G.igEvent}},
+        '4': {fields: campos({'f-zone':G.locationZone,'f-reform':G.reformCostInput,'f-furn':G.furniture,'f-rent4':G.monthlyRent}), options:{islaChoice:'tenerife',locType:G.locationType,localType:G.localType,reformLvl:G.reformLevel,locChoice:G.locationChoice}},
+        '5': {fields: campos({'f-nw':G.numWorkers,'f-ws':G.workerSalary,'f-os':G.ownSalary,'f-sch':G.schedule,'f-train':G.trainingNeeded}), options:{workAlone:'empleados',hiringEv:G.hiringChoice}, blocks:{empBox:''}},
+        '6': {fields: campos({'f-mktb':G.marketingBudget,'f-promos':G.openingPromo,'f-collabs':G.collabs}), options:{doMkt:'si',mktChoice:G.marketingChoice}},
+        '7': {fields: campos({'f-own':G.ownMoney,'f-loan':G.loanAmount,'f-int':G.loanInterest,'f-months':G.loanMonths,'e-furn':G.expenses.furniture,'e-sup':G.expenses.supplies,'e-leg':G.expenses.legal,'e-maq':G.expenses.machinery,'e-soft':G.expenses.software,'e-mkt':G.expenses.marketing,'e-cush':G.expenses.cushion,'e-cont':G.expenses.contingency}), options:{financing:'prestamo',crisis:G.crisisChoice}, blocks:{loanBox:'cd'}},
+        '8': {fields: campos({'gf-adv':G.fixedCosts.advisory,'gf-ins':G.fixedCosts.insurance,'gf-tel':G.fixedCosts.telecom,'gv-sup':G.variableCosts.supplies,'gv-tra':G.variableCosts.transport,'gv-com':G.variableCosts.commissions,'gv-uti':G.variableCosts.utilities,'gv-mis':G.variableCosts.misc})},
+        '9': {fields: campos({'f-sales':G.monthlySales,'f-price':G.avgPrice}), options:{heatEv:G.heatChoice}},
+        '10': {fields: campos({'lg-alta':'si','lg-igic':'si','lg-cont':'si','lg-lic':'si','lg-lopd':'si','lg-prl':'si','f-sust':G.sustainable,'f-env':G.envImpact}), options:{localEmp:G.localEmploy,digi:G.digitalize}}
+    };
+}
+
+function radixIniciarModoAyuntamiento() {
+    var perfil = {
+        turn: 10,
+        name: 'Ayuntamiento de Santa Cruz de Tenerife', gender: 'nd', age: 42, education: 'FP Grado Medio',
+        experience: 'Más de 20 años como camarero en restaurantes y tabernas de Santa Cruz. Conozco el trato con el cliente, la sala, el servicio de vinos y el corte de jamón. Nunca he tenido mi propio negocio.',
+        motivation: 'Después de tantos años trabajando para otros quiero montar mi propia taberna, con el trato cercano y la calidad de las de toda la vida, para un público que valora la cocina canaria de siempre.',
+        dafo: ['B', 'C', 'C', 'B', 'B'],
+        bizType: 'restauracion', bizTypeLabel: 'Restauración', bizName: 'La Taberna de la Rambla',
+        mainProduct: 'Tapas y raciones de cocina canaria clásica, con jamón cortado a cuchillo y platos de cuchara',
+        bizDesc: 'Taberna pequeña de unas 28 plazas, con decoración cuidada y ambiente tranquilo. Cocina canaria tradicional: jamón, queso, pulpo, chipirones, conejo, carne de cabra y postres caseros. Servicio cercano y vinos de bodegas canarias.',
+        marketNeed: 'En la zona hay pocos sitios cómodos y tranquilos para comer cocina canaria de calidad sin ir al centro turístico, con servicio atento y precios razonables.',
+        legalForm: 'autonomo', legalFormLabel: 'Autónomo', sectorExp: true, sectorTraining: true,
+        objective: 'Ser un sitio de referencia en el barrio con clientela fija y buenas reseñas, y cubrir costes y deuda al terminar el primer año.',
+        mission: 'Ofrecer cocina canaria de siempre con trato cercano en un ambiente cómodo y elegante.',
+        vision: 'Ser la taberna de confianza del barrio, conocida por su jamón, su producto local y su servicio.',
+        targetDesc: 'Personas de 50 años en adelante, residentes de la zona, con poder adquisitivo medio-alto: matrimonios, grupos de amigos, familias que celebran comidas y jubilados con buen nivel de vida. Buscan comer bien y con calma.',
+        targetAge: '50-65 años', targetType: 'residente', targetZone: 'local', targetIncome: 'medio',
+        targetNeeds: 'Quiere calidad y buen trato, un local tranquilo con poco ruido, platos reconocibles y raciones bien servidas. Le frustran las esperas y los sitios masificados. Valora poder reservar por teléfono y que lo conozcan.',
+        igEvent: 'B', island: 'Tenerife', municipality: 'Santa Cruz de Tenerife',
+        islandAdjective: ISLAS.tenerife.adjetivo, rentHint: ISLAS.tenerife.rentHint, localMedia: ISLAS.tenerife.media,
+        locationType: 'fisico', locationZone: 'Santa Cruz de Tenerife', localType: 'alquiler', reformLevel: 'parcial',
+        reformCost: 9000, reformCostInput: 9000,
+        furniture: 'Mesas y sillas para 28 plazas, barra con soporte para jamón, cámara de frío, bodega de vinos, cocina de 4 fuegos, plancha, freidora, campana, lavavajillas, vajilla y cristalería, TPV y decoración.',
+        locationChoice: 'B', monthlyRent: 1300,
+        workAlone: false, numWorkers: 3, workerSalary: 1300, ownSalary: 1500,
+        schedule: 'Partido (9-14h / 17-21h)',
+        trainingNeeded: 'Manipulador de alimentos, APPCC, alérgenos, corte de jamón, maridaje de vinos y atención a clientes mayores.',
+        hiringChoice: 'A', hiringEventCost: 1729,
+        doMarketing: true, marketingBudget: 250,
+        openingPromo: 'Primera semana con copa de vino canario de cortesía con cada ración de jamón, y una cata para los vecinos el día de la inauguración.',
+        collabs: 'Bodegas canarias, queserías, carnicerías locales, asociaciones de vecinos y centros de mayores del barrio.',
+        marketingChoice: 'D', mktInitialCost: 300,
+        ownMoney: 22000, financingType: 'prestamo', financingTypes: ['prestamo'], loanAmount: 18000,
+        loanInterest: 6, loanMonths: 60, loanPayment: 347.99,
+        expenses: {rent:1300,deposit:2600,reform:9000,furniture:6000,supplies:500,legal:2000,machinery:8500,software:700,marketing:500,cushion:4500,contingency:2000},
+        totalInvestment: 31100, crisisChoice: 'B', capital: 6871,
+        fixedCosts: {rent:1300,advisory:90,insurance:80,telecom:60,ads:250,loan:347.99,wages:3900,ssEmployees:1194},
+        variableCosts: {supplies:6100,transport:60,commissions:300,utilities:600,misc:250},
+        ssCost: 88.56, ssEmployees: 1194, totalFixed: 7310.55, totalVariable: 7310,
+        monthlySales: 650, avgPrice: 26.5, monthlyRevenue: 17225,
+        monthlyProfit: 2604.45, profitMargin: 10.1, breakEven: 552, heatChoice: 'A',
+        legal: {alta:'si',igic:'si',contracts:'si',licenses:'si',lopd:'si',prl:'si'},
+        sustainable: 'Proveedores canarios de kilómetro 0, carta de temporada, vajilla reutilizable y envases compostables para llevar.',
+        envImpact: 'Residuos de cocina y aceite usado. Separación de residuos, recogida por gestor autorizado, iluminación LED y equipos de bajo consumo.',
+        localEmploy: 'si', digitalize: 'parcial',
+        reputation: 78, bar: 98,
+        decisions: [
+            {t:3,txt:'Atención al contacto de Instagram: +8 reputación',imp:8},
+            {t:5,txt:'Contrataste personal: +10 rep, -1.729 €',imp:10},
+            {t:6,txt:'Evento de apertura: -300 €',imp:-300},
+            {t:7,txt:'Negociaste la crisis eléctrica: sin coste',imp:0},
+            {t:8,txt:'Costes fijos: 50% del total mensual',imp:10},
+            {t:9,txt:'Promoción para residentes: -5% margen',imp:0},
+            {t:10,txt:'Trámites en regla y empleo local',imp:8}
+        ]
+    };
+    Object.keys(perfil).forEach(function (key) { G[key] = perfil[key]; });
+    G.capital = 0;
+    G.reputation = 50;
+    G.bar = 50;
+    G.decisions = [];
+    G.turn = 0;
+    radixPrepararFormularioAyuntamiento();
+    goTurn0();
+}
+
+function radixEmpezarAyuntamiento() {
+    G.capital = 6871;
+    G.reputation = 78;
+    G.bar = 98;
+    G.turn = 10;
+    refreshDash();
+    radixActualizarCodigoUI();
+    initSimulation();
+}
+
 function initSimulation() {
     G.simulationStarted = true;
     G.simScreen = 'week';
@@ -20441,11 +20564,11 @@ function createEmptyPnL() {
         ingresos_financieros: 0,
         subvenciones: 0,
         compras: G.variableCosts.supplies || 0,
-        servicios: (G.variableCosts.transport || 0) + (G.variableCosts.commissions || 0) + (G.variableCosts.misc || 0),
+        servicios: (G.variableCosts.transport || 0) + (G.variableCosts.commissions || 0) + (G.variableCosts.misc || 0) + (G.fixedCosts.telecom || 0),
         impuestos: 0,
         suministros: G.variableCosts.utilities || 0,
         asesoria: G.fixedCosts.advisory || 0,
-        publicidad: (G.fixedCosts.ads || 0) + (G.marketingBudget || 0),
+        publicidad: G.fixedCosts.ads || G.marketingBudget || 0,
         personal: (G.ssCost || 0) + (G.fixedCosts.wages || 0) + (G.fixedCosts.ssEmployees || 0),
         alquiler: G.fixedCosts.rent || 0,
         seguros: G.fixedCosts.insurance || 0,
@@ -21593,7 +21716,10 @@ function refreshSimDash() {
 /* ════════════════════════════════════════════════════════════
    INIT
    ════════════════════════════════════════════════════════════ */
-try { goTurn0(); radixActualizarCodigoUI(); }
+try {
+    if (radixModoAyuntamientoSolicitado()) radixIniciarModoAyuntamiento();
+    else { goTurn0(); radixActualizarCodigoUI(); }
+}
 catch(err) { document.getElementById('gameArea').innerHTML='<div style="padding:40px;color:red"><h2>Error:</h2><pre>'+err.message+'</pre></div>'; }
 </script>
 </body>
