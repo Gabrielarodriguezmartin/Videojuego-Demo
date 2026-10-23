@@ -476,6 +476,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
 <script>
 /* Guardado automático de PDFs en Google Drive para esta versión del juego.
@@ -490,6 +491,113 @@ function radix7NuevaSimulacion(){
   RADIX7_PDF_ENVIADOS = {};
   RADIX_SAVE_SCREEN = 'welcome';
   location.reload();
+}
+
+var RADIX7_REPORTES_IMPRESION = {};
+
+async function radix7CapturarInforme(tipo, horizontal) {
+  if(!window.html2canvas) throw new Error('No se ha cargado la herramienta de captura.');
+  var gameArea=document.getElementById('gameArea');
+  if(!gameArea) throw new Error('No se encontró el contenido del informe.');
+  var target=tipo==='canvas'?(gameArea.querySelector('.canvas-report')||gameArea):gameArea;
+  if(document.fonts && document.fonts.ready) await document.fonts.ready;
+  await new Promise(function(resolve){setTimeout(resolve,900);});
+  var captura=await html2canvas(target,{
+    scale:1.5,useCORS:true,allowTaint:true,backgroundColor:'#ffffff',logging:false,
+    windowWidth:target.scrollWidth,
+    onclone:function(doc){
+      var areaClonado=doc.getElementById('gameArea');
+      if(!areaClonado) return;
+      var ocultos=areaClonado.querySelectorAll('.no-print');
+      for(var i=0;i<ocultos.length;i++) ocultos[i].style.visibility='hidden';
+      var tarjetas=areaClonado.querySelectorAll('.cd');
+      for(var j=0;j<tarjetas.length;j++){
+        tarjetas[j].style.animation='none';tarjetas[j].style.transition='none';
+        tarjetas[j].style.opacity='1';tarjetas[j].style.transform='none';
+      }
+    }
+  });
+  RADIX7_REPORTES_IMPRESION[tipo]={canvas:captura,landscape:horizontal};
+}
+
+async function radix7ContinuarConInforme(tipo,horizontal,continuar,buttonId,statusId){
+  var boton=document.getElementById(buttonId), estado=document.getElementById(statusId);
+  if(boton){boton.disabled=true;boton.textContent='Preparando…';}
+  if(estado){estado.style.display='block';estado.textContent='Guardando este informe para la impresión conjunta…';}
+  try{await radix7CapturarInforme(tipo,horizontal);continuar();}
+  catch(err){
+    console.error('No se pudo preparar el informe para la impresión conjunta:',err);
+    if(boton){boton.disabled=false;boton.textContent=tipo==='canvas'?'Continuar a simulación →':'Continuar al plan de negocio →';}
+    if(estado){estado.style.display='block';estado.style.color='#b42318';estado.textContent='No se pudo preparar el informe. Vuelve a intentarlo.';}
+  }
+}
+function radix7ContinuarDesdeCanvas(){radix7ContinuarConInforme('canvas',true,goSimIntro,'radix-next-canvas','radix-pdf-status-canvas');}
+function radix7ContinuarDesdeResultado(){radix7ContinuarConInforme('annual',false,goFinal,'radix-next-prevision','radix-pdf-status-prevision');}
+
+function radix7AgregarInformeAlPDF(pdf,canvas,horizontal,primera){
+  var margen=8, anchoPagina=horizontal?297:210, altoPagina=horizontal?210:297;
+  var anchoUtil=anchoPagina-margen*2, altoUtil=altoPagina-margen*2;
+  if(horizontal){
+    if(!primera) pdf.addPage('a4','landscape');
+    var escala=Math.min(anchoUtil/canvas.width,altoUtil/canvas.height);
+    var w=canvas.width*escala,h=canvas.height*escala;
+    pdf.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',(anchoPagina-w)/2,(altoPagina-h)/2,w,h,undefined,'FAST');
+    return false;
+  }
+  var altoCorte=Math.max(1,Math.floor(canvas.width*altoUtil/anchoUtil)), y=0;
+  while(y<canvas.height){
+    var alto=Math.min(altoCorte,canvas.height-y), pagina=document.createElement('canvas');
+    pagina.width=canvas.width;pagina.height=alto;
+    var ctx=pagina.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,pagina.width,pagina.height);
+    ctx.drawImage(canvas,0,y,canvas.width,alto,0,0,canvas.width,alto);
+    if(!primera || y>0) pdf.addPage('a4','portrait');
+    pdf.addImage(pagina.toDataURL('image/jpeg',0.92),'JPEG',margen,margen,anchoUtil,alto*anchoUtil/canvas.width,undefined,'FAST');
+    y+=alto;
+  }
+  return false;
+}
+
+async function radix7ImprimirInformeCompleto(){
+  var boton=document.getElementById('radix-print-final'), estado=document.getElementById('radix-pdf-status-final');
+  if(!RADIX7_REPORTES_IMPRESION.canvas || !RADIX7_REPORTES_IMPRESION.annual){
+    if(estado){estado.style.display='block';estado.style.color='#b42318';estado.textContent='Para descargar el ZIP, continúa desde el principio hasta esta pantalla en la misma sesión.';}
+    return;
+  }
+  if(!window.jspdf || !window.html2canvas || !window.JSZip){if(estado){estado.style.display='block';estado.textContent='No se han cargado las herramientas para generar los documentos ZIP.';}return;}
+  if(boton){boton.disabled=true;boton.style.display='none';}
+  if(estado){estado.style.display='block';estado.style.color='var(--muted, #555)';estado.textContent='Preparando los tres documentos por separado y guardándolos en un ZIP…';}
+  try{
+    await radix7CapturarInforme('final',false);
+    var PDF=window.jspdf.jsPDF,zip=new window.JSZip();
+    var orden=[
+      {tipo:'annual',nombre:'01_Previsión_Anual.pdf',orientacion:'portrait',horizontal:false},
+      {tipo:'canvas',nombre:'02_Business_Model_Canvas.pdf',orientacion:'landscape',horizontal:true},
+      {tipo:'final',nombre:'03_Plan_de_Negocio_Final.pdf',orientacion:'portrait',horizontal:false}
+    ];
+    for(var i=0;i<orden.length;i++){
+      var doc=orden[i],reporte=RADIX7_REPORTES_IMPRESION[doc.tipo];
+      var pdf=new PDF({orientation:doc.orientacion,unit:'mm',format:'a4',compress:true});
+      radix7AgregarInformeAlPDF(pdf,reporte.canvas,doc.horizontal,true);
+      zip.file(doc.nombre,pdf.output('arraybuffer'));
+    }
+    var blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
+    var nombre='RADIX_Informes.zip',uri=await new Promise(function(resolve,reject){
+      var reader=new FileReader();reader.onload=function(){resolve(reader.result);};reader.onerror=reject;reader.readAsDataURL(blob);
+    });
+    var payload={token:RADIX7_DRIVE_TOKEN,partidaId:RADIX7_PARTIDA_ID,nombreArchivo:nombre,base64:uri.split(',')[1],mimeType:'application/zip'};
+    if(DRIVE_WEB_APP_URL && DRIVE_WEB_APP_URL.indexOf('PEGAR_AQUI')===-1){
+      await fetch(DRIVE_WEB_APP_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
+    }
+    var enlace=document.createElement('a'),url=URL.createObjectURL(blob);
+    enlace.href=url;enlace.download=nombre;document.body.appendChild(enlace);enlace.click();enlace.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);RADIX7_PDF_ENVIADOS[nombre]=true;
+    if(estado){estado.style.color='var(--suc, #25855a)';estado.textContent='ZIP descargado con los tres documentos PDF por separado.';}
+    var siguiente=document.getElementById('radix-next-final');if(siguiente)siguiente.style.display='';
+  }catch(err){
+    console.error('No se pudo generar el ZIP de informes:',err);
+    if(boton){boton.disabled=false;boton.style.display='';}
+    if(estado){estado.style.color='#b42318';estado.textContent='No se pudo crear el ZIP con los tres documentos. Puedes volver a intentarlo.';}
+  }
 }
 
 async function radix7GenerarYGuardarPDF(nombre, landscape){
@@ -1568,7 +1676,7 @@ function goTurn4(){
     '<div class="fg"><label>Coste estimado de reforma (€)</label><input type="number" id="f-reform" placeholder="0" min="0"></div>'+
     '<div class="fg"><label>Mobiliario y equipamiento necesario</label><textarea id="f-furn" placeholder="Lista lo que necesitas. Busca precios reales en internet."></textarea></div></div>'+
   '<div class="cd"><div class="ci cib">🏷️</div><h2>Alquiler mensual</h2>'+
-    '<div class="fg"><label>Alquiler mensual estimado (€/mes)</label><input type="number" id="f-rent4" placeholder="Ej: 600" min="0"><div class="hn">'+(radixModoAyuntamientoSolicitado()?'Para esta demo se ha seleccionado un alquiler de 1.300 €/mes en Los Llanos de Aridane.':'Busca en Idealista o Fotocasa cuánto cuestan los locales en Los Llanos. Centro: ~400-900 €/mes. Zona residencial: ~200-500 €/mes.')+' En caso de que no pagues alquiler, añade 0 en el apartado alquiler mensual estimado (€/mes).</div></div></div>'+ 
+    '<div class="fg"><label>Alquiler mensual estimado (€/mes)</label><input type="number" id="f-rent4" placeholder="Ej: 600" min="0"><div class="hn">'+(radixModoAyuntamientoSolicitado()?'Para esta demo se ha seleccionado un alquiler de 900 €/mes en Los Llanos de Aridane.':'Busca en Idealista o Fotocasa cuánto cuestan los locales en Los Llanos. Centro: ~400-900 €/mes. Zona residencial: ~200-500 €/mes.')+' En caso de que no pagues alquiler, añade 0 en el apartado alquiler mensual estimado (€/mes).</div></div></div>'+ 
   '<div class="cd"><div class="ci cib">📜</div><h2>Licencias para '+G.bizTypeLabel+'</h2>'+
     '<p style="margin-bottom:8px">Según tu tipo de negocio, necesitarás:</p><ul>'+licHtml+'</ul>'+
     '<div class="al al-i"><span class="ai">ℹ️</span>Para más información sobre este tipo de gestiones, acude a la Concejalía de Comercio del Ayuntamiento, a la Oficina del Emprendedor o a la Cámara de Comercio.</div></div>'+
@@ -2143,8 +2251,7 @@ function goPlanCanvas(){
   // BOTONES debajo del canvas
   '<div class="no-print" style="display:flex;flex-direction:column;align-items:center;gap:10px;margin-top:20px">'+
     '<div id="radix-pdf-status-canvas" role="status" aria-live="polite" style="display:none;text-align:center;max-width:620px"></div>'+
-    '<button id="radix-print-canvas" class="btn bs" onclick="radix7GenerarYGuardarPDF(&quot;02_Business_Model_Canvas.pdf&quot;,true)">🖨️ Imprimir</button>'+
-    '<button id="radix-next-canvas" class="btn bp" style="display:none" onclick="goSimIntro()">Continuar a simulación →</button>'+
+    '<button id="radix-next-canvas" class="btn bp" onclick="radix7ContinuarDesdeCanvas()">Continuar a simulación →</button>'+
   '</div>'+
 
   // PIE
@@ -2346,9 +2453,9 @@ function goFinal(){
       '<p><strong>Reputación:</strong> '+G.reputation+'/100</p></div>'+
     '</div></div>'+
 
-  '<div class="bc" style="margin-top:32px;margin-bottom:36px;display:flex;flex-direction:column;align-items:center;gap:10px">'+
+  '<div class="bc no-print" style="margin-top:32px;margin-bottom:36px;display:flex;flex-direction:column;align-items:center;gap:10px">'+
     '<div id="radix-pdf-status-final" role="status" aria-live="polite" style="display:none;text-align:center;max-width:620px"></div>'+
-    '<button id="radix-print-final" class="btn bs" onclick="radix7GenerarYGuardarPDF(&quot;03_Plan_de_Negocio_Final.pdf&quot;,false)">🖨️ Imprimir plan</button>'+
+    '<button id="radix-print-final" class="btn bs" onclick="radix7ImprimirInformeCompleto()">📦 Descargar ZIP con los tres documentos</button>'+
     '<button id="radix-next-final" class="btn bp" style="display:none" onclick="radix7NuevaSimulacion()">🔄 Nueva simulación</button></div>';
 }
 
@@ -19936,41 +20043,19 @@ function buildWeeklyQuestions() {
             }
         ]
     },
-    {
-        pregunta: "Un andamio instalado en el edificio contiguo dificulta el acceso de los proveedores. Algunas entregas llegan tarde y ciertos productos frescos corren el riesgo de no recibirse en buenas condiciones. ¿Cómo respondes?",
+      {
+        pregunta: "Una huelga de transportistas amenaza con retrasar durante varios días la llegada de mercancía a Los Llanos. Algunos ingredientes habituales podrían agotarse y los proveedores no garantizan las fechas de entrega. ¿Cómo respondes?",
         opciones: [
-            "Hablas con los proveedores y los responsables de la obra para acordar horarios o un punto de entrega alternativo. Además, revisas las existencias de productos esenciales.",
-            "No cambias la operativa y esperas a que terminen las obras, aunque sigan produciéndose retrasos.",
-            "Aumentas considerablemente los pedidos por adelantado para tener más reservas, sin comprobar el espacio disponible ni la caducidad."
+            "Contactas con tus proveedores para conocer las existencias disponibles, buscas alternativas locales y adaptas temporalmente la carta a los ingredientes que puedes garantizar.",
+            "Mantienes la carta habitual y esperas a que se resuelva la huelga, confiando en que los pedidos lleguen antes de agotar las existencias.",
+            "Realizas compras de emergencia en distintos establecimientos para acumular la mayor cantidad posible de productos, sin revisar su coste ni su rotación."
         ],
         impactos: [
-            {
-                movimientos: [
-                    { categoria_pnl: "servicios", dinero: -500 },
-                    { categoria_pnl: "compras", dinero: -200 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 1200 }
-                ],
-                reputacion: 6,
-                feedback: "La coordinación reduce las interrupciones y protege la calidad del producto. Las medidas preventivas cuestan algo, pero ayudan a evitar pérdidas y cancelaciones."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "ingresos_operativos", dinero: -2500 },
-                    { categoria_pnl: "compras", dinero: -400 }
-                ],
-                reputacion: -7,
-                feedback: "No actuar deja al restaurante expuesto a retrasos, mermas y posibles platos no disponibles. Una incidencia externa requiere una respuesta operativa."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "compras", dinero: -2800 },
-                    { categoria_pnl: "ingresos_operativos", dinero: -500 }
-                ],
-                reputacion: -4,
-                feedback: "Comprar de más puede inmovilizar dinero y aumentar las mermas, especialmente en productos frescos. Es preferible ajustar las existencias según la demanda y la capacidad de almacenamiento."
-            }
+            { movimientos: [{ categoria_pnl: "compras", dinero: -400 }, { categoria_pnl: "ingresos_operativos", dinero: 1000 }], reputacion: 7, feedback: "Buscar proveedores alternativos y adaptar la carta permite mantener el servicio y reducir el riesgo de quedarte sin productos esenciales. Aunque algunos ingredientes pueden resultar más caros, la planificación ayuda a controlar las pérdidas y conservar la confianza de los clientes." },
+            { movimientos: [{ categoria_pnl: "ingresos_operativos", dinero: -2500 }], reputacion: -8, feedback: "Esperar sin preparar alternativas puede provocar la falta de ingredientes, cambios de última hora y platos no disponibles. Ante una interrupción logística, anticiparse es clave para mantener la actividad y evitar pérdidas de ingresos." },
+            { movimientos: [{ categoria_pnl: "compras", dinero: -2200 }, { categoria_pnl: "ingresos_operativos", dinero: -300 }], reputacion: -4, feedback: "Comprar sin comparar precios ni valorar las necesidades reales puede disparar los costes y generar excedentes o desperdicio. Además, acumular productos no garantiza que sean los ingredientes que más necesitas. En una crisis de suministro, conviene priorizar los productos esenciales y ajustar las compras a la demanda prevista." }
         ]
-    },
+      },
     {
         pregunta: "La clientela habitual del restaurante ronda los 50 años o más, aunque también quieres atraer a personas jóvenes. Estás valorando modernizar el servicio para reducir tiempos y costes, pero no quieres perder el trato cercano que caracteriza a la cocina canaria. ¿Qué eliges?",
         opciones: [
@@ -20006,72 +20091,32 @@ function buildWeeklyQuestions() {
             }
         ]
     },
-    {
-        pregunta: "El restaurante recibe algunos visitantes, pero quieres consolidar una clientela local y atraer también a personas jóvenes, sin abandonar a tus clientes habituales de más de 50 años. ¿Cómo promocionas el negocio?",
+      {
+        pregunta: "Al revisar las ventas de tu restaurante en Los Llanos de Aridane, La Palma, identificas los meses de menor actividad del año. Quieres crear una estrategia para atraer más clientela y aumentar las ventas durante esa época. ¿Qué decides hacer?",
         opciones: [
-            "Contratas una gestión profesional de redes sociales y contenido sobre la cocina canaria, con campañas dirigidas tanto al público local como a visitantes.",
-            "Colaboras con influencers y creadores de contenido gastronómico, seleccionando perfiles que conecten con el público de Tenerife y midiendo los resultados.",
-            "Desarrollas alianzas con comercios, asociaciones y actividades del barrio, combinadas con promociones para clientes habituales."
+            "Diseñas una campaña para la clientela local, con un menú especial y ventajas para quienes repitan visita en los días de menor demanda. Calculas los márgenes y mides las reservas y las ventas.",
+            "Lanzas grandes descuentos en toda la carta durante la temporada baja y los promocionas en redes sociales para llenar el restaurante, sin calcular cuánto ganas con cada plato.",
+            "Organizas jornadas gastronómicas con productos de La Palma y colaboras con comercios y alojamientos de la zona para promocionarlas, ajustando las fechas y los costes a la demanda."
         ],
         impactos: [
-            {
-                movimientos: [
-                    { categoria_pnl: "publicidad", dinero: -1800 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 2800 }
-                ],
-                reputacion: 7,
-                feedback: "Una comunicación constante puede mejorar la visibilidad y conectar generaciones diferentes. Es importante medir reservas, visitas y ventas para saber si la inversión funciona."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "publicidad", dinero: -2500 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 3000 }
-                ],
-                reputacion: 6,
-                feedback: "Una colaboración bien elegida puede dar visibilidad al restaurante, aunque el alcance en redes no garantiza ventas. Define el público, las condiciones y cómo medirás los resultados."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "publicidad", dinero: -700 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 1900 }
-                ],
-                reputacion: 9,
-                feedback: "La colaboración con el entorno fortalece la relación con el barrio y puede generar recomendaciones de confianza. Es una opción relativamente económica para atraer clientela recurrente."
-            }
+            { movimientos: [{ categoria_pnl: "publicidad", dinero: -800 }, { categoria_pnl: "ingresos_operativos", dinero: 2100 }], reputacion: 8, feedback: "Una propuesta adaptada a la clientela local puede generar visitas recurrentes durante los meses de menor actividad. Controlar los márgenes y medir los resultados te ayuda a comprobar si la campaña es rentable." },
+            { movimientos: [{ categoria_pnl: "publicidad", dinero: -1200 }, { categoria_pnl: "ingresos_operativos", dinero: 600 }], reputacion: -3, feedback: "Los descuentos pueden atraer más visitas, pero reducen el ingreso por cada plato vendido y la campaña supone un gasto adicional. Sin calcular los márgenes, puedes aumentar la facturación sin mejorar la rentabilidad ni cubrir los costes." },
+            { movimientos: [{ categoria_pnl: "publicidad", dinero: -600 }, { categoria_pnl: "otros_gastos", dinero: -500 }, { categoria_pnl: "ingresos_operativos", dinero: 2000 }], reputacion: 9, feedback: "Las jornadas gastronómicas y las colaboraciones crean nuevos motivos para visitar el restaurante y refuerzan su vínculo con La Palma. Ajustar los costes y trabajar con reservas ayuda a aprovechar la demanda y a controlar el riesgo económico de la iniciativa." }
         ]
-    },
-    {
-        pregunta: "Durante varios servicios, dos empleados discuten por el reparto de tareas. Uno considera que siempre le toca recoger y limpiar, mientras que el otro cree que está atendiendo más mesas. El conflicto empieza a afectar al ambiente y al servicio. ¿Qué haces?",
+      },
+      {
+        pregunta: "Durante varios servicios, el jefe de cocina y el jefe de sala discuten porque las comandas salen con errores o a destiempo. Cocina señala que sala transmite los pedidos de forma confusa, mientras que sala se queja de que cocina no respeta los tiempos ni avisa de los retrasos. El conflicto empieza a afectar al equipo y a la clientela. ¿Qué haces?",
         opciones: [
-            "Hablas con ambos por separado y después conjuntamente, revisas el reparto de tareas y estableces responsabilidades claras para cada turno.",
-            "Dejas que lo resuelvan entre ellos mientras sigan sacando el trabajo, para no intervenir en cuestiones personales.",
-            "Cambias inmediatamente los turnos y responsabilidades de ambos sin consultarles, con el objetivo de cortar las discusiones."
+            "Reúnes a ambos, revisáis dónde se producen los fallos y acordáis un procedimiento claro para transmitir las comandas, coordinar los tiempos y comunicar cambios o retrasos.",
+            "Dejas que lo resuelvan entre ellos, porque cada uno es responsable de su área y deberían saber coordinarse.",
+            "Impones que todas las comandas se preparen por orden de llegada y prohíbes que sala pida cambios de prioridad, sin escuchar a los responsables."
         ],
         impactos: [
-            {
-                movimientos: [
-                    { categoria_pnl: "personal", dinero: 400 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 1300 }
-                ],
-                reputacion: 8,
-                feedback: "Escuchar al equipo y definir tareas con claridad ayuda a recuperar la colaboración. Dedicar tiempo a liderar también es una inversión en la calidad del servicio."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "ingresos_operativos", dinero: -1600 }
-                ],
-                reputacion: -8,
-                feedback: "Ignorar el conflicto puede normalizar el mal ambiente y perjudicar a clientes y compañeros. Como responsable, debes intervenir antes de que el problema se agrave."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "ingresos_operativos", dinero: -500 }
-                ],
-                reputacion: -4,
-                feedback: "Has actuado rápido, pero imponer cambios sin escuchar a las personas puede aumentar la frustración. Es mejor combinar decisiones claras con una explicación justa."
-            }
+            { movimientos: [{ categoria_pnl: "ingresos_operativos", dinero: 800 }], reputacion: 8, feedback: "Revisar los fallos con ambos responsables y acordar cómo coordinarse reduce los errores y las esperas. La comunicación entre cocina y sala mejora el ambiente del equipo y la experiencia de la clientela, lo que puede favorecer los ingresos." },
+            { movimientos: [{ categoria_pnl: "ingresos_operativos", dinero: -1200 }], reputacion: -8, feedback: "La falta de intervención permite que continúen los errores, los retrasos y los reproches. Aunque cada responsable dirija su área, necesitas asegurar que cocina y sala trabajen de forma coordinada." },
+            { movimientos: [{ categoria_pnl: "ingresos_operativos", dinero: -500 }], reputacion: -4, feedback: "Has establecido una regla rápida, pero no has identificado el origen de los fallos. Un orden rígido puede dificultar que los platos de una misma mesa salgan juntos o que se atiendan incidencias durante el servicio." }
         ]
-    },
+      },
     {
         pregunta: "Al cerrar cada jornada, observas que quedan platos preparados o productos que siguen siendo aptos para el consumo, pero no se han vendido. Tirarlos aumenta los costes y genera residuos. ¿Qué medida adoptas?",
         opciones: [
@@ -20136,73 +20181,33 @@ function buildWeeklyQuestions() {
             }
         ]
     },
-    {
-        pregunta: "Antes de firmar el alquiler, visitas un local antiguo que te gusta por su ubicación y precio. Sin embargo, tiene escalones en la entrada, pasillos estrechos y un aseo pequeño. Hacer cambios podría ser caro. ¿Cómo decides?",
+      {
+        pregunta: "Un amigo de tu hermano te ofrece un local de condiciones similares al que tenías previsto alquilar, pero en otra ubicación, con un alquiler más barato y mejores condiciones de aparcamiento. ¿Qué decides hacer?",
         opciones: [
-            "Antes de firmar, consultas con un técnico los requisitos de accesibilidad y urbanismo aplicables, solicitas una estimación de las obras y negocias con la propiedad quién asumirá cada coste.",
-            "Firmas el alquiler porque el local es económico y dejas las adaptaciones para más adelante, cuando el restaurante genere ingresos.",
-            "Descartas el local y buscas otro que ya tenga mejores condiciones de accesibilidad, aunque el alquiler sea algo más elevado."
+            "Comparas ambas ubicaciones: visitas la zona, observas el paso de personas y valoras la cercanía a tu clientela, el aparcamiento y el ahorro en alquiler antes de decidir.",
+            "Aceptas la oferta directamente porque el alquiler es más barato y hay más aparcamiento. Al ser un amigo de tu hermano, confías en que será una buena elección.",
+            "Mantienes el local que tenías previsto porque conoces mejor su ubicación y crees que encaja con tu clientela, aunque suponga pagar más y tenga menos aparcamiento."
         ],
         impactos: [
-            {
-                movimientos: [
-                    { categoria_pnl: "servicios", dinero: -700 }
-                ],
-                reputacion: 8,
-                feedback: "La revisión técnica previa reduce el riesgo de asumir obras inesperadas o problemas de cumplimiento. Comprueba la normativa aplicable al inmueble y a la actividad antes de comprometerte."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "alquiler", dinero: -2400 },
-                    { categoria_pnl: "otros_gastos", dinero: -2800 },
-                    { categoria_pnl: "ingresos_operativos", dinero: -1200 }
-                ],
-                reputacion: -10,
-                feedback: "Firmar sin evaluar las adaptaciones puede provocar costes imprevistos, retrasos y dificultades para atender a parte de la clientela. La accesibilidad debe estudiarse antes de comprometer la inversión."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "alquiler", dinero: -800 }
-                ],
-                reputacion: 6,
-                feedback: "Elegir un local más adecuado puede reducir las obras y facilitar el acceso a más personas. Aun así, conviene comprobar las condiciones reales y el cumplimiento normativo del nuevo espacio."
-            }
+            { movimientos: [{ categoria_pnl: "servicios", dinero: -200 }, { categoria_pnl: "alquiler", dinero: -800 }], reputacion: 8, feedback: "Comparar las dos ubicaciones te permite valorar el ahorro, el aparcamiento y la cercanía a tu clientela antes de comprometerte. Inviertes algo de tiempo y dinero en decidir con criterio, reduciendo el riesgo de elegir un local poco adecuado." },
+            { movimientos: [{ categoria_pnl: "alquiler", dinero: -800 }, { categoria_pnl: "ingresos_operativos", dinero: -400 }], reputacion: -5, feedback: "El nuevo local reduce el gasto de alquiler y facilita el aparcamiento, pero la ubicación puede no encajar con tu público. Confiar en quien te lo ofrece sin analizar la zona puede llevarte a perder ventas que no compensen el ahorro." },
+            { movimientos: [{ categoria_pnl: "alquiler", dinero: -1200 }], reputacion: 5, feedback: "Mantener una ubicación que conoces puede ayudarte a conservar a tu clientela habitual. Sin embargo, asumes un alquiler mayor y menos facilidades de aparcamiento, por lo que debes comprobar que esas ventajas compensan el coste adicional." }
         ]
-    },
-    {
-        pregunta: "Quieres que el restaurante transmita la identidad canaria, con materiales, colores y detalles inspirados en la cultura local. A la vez, buscas un ambiente acogedor para tu clientela habitual de más de 50 años y atractivo para personas jóvenes. También quieres que todo el equipo reciba un trato justo. ¿Qué enfoque eliges?",
+      },
+      {
+        pregunta: "Estás eligiendo el nombre de tu restaurante. ¿Qué decides hacer?",
         opciones: [
-            "Diseñas un espacio cálido inspirado en Canarias, con buena iluminación, circulación cómoda y elementos tradicionales combinados con detalles actuales. Estableces criterios claros y equitativos para los horarios, las tareas y las oportunidades del equipo.",
-            "Inviertes en una decoración muy moderna pensada para redes sociales, aunque el espacio resulte menos cómodo para parte de la clientela y no revisas cómo se distribuyen las tareas del equipo.",
-            "Mantienes una decoración tradicional con pocos cambios y dejas que cada responsable organice los turnos y las tareas según su propio criterio."
+            "Contratas a una agencia de marketing digital para que desarrolle un nombre acorde con la identidad del restaurante y el público al que quieres llegar.",
+            "Le haces caso a tu primo y llamas al restaurante «Friends», como su serie favorita, sin valorar si encaja con el negocio.",
+            "Sigues el consejo de tu mujer, que considera que gastar dinero en eso es perderlo. Dedicas tiempo a pensar varias opciones y eliges un nombre acorde con la personalidad del restaurante."
         ],
         impactos: [
-            {
-                movimientos: [
-                    { categoria_pnl: "otros_gastos", dinero: -2500 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 2200 }
-                ],
-                reputacion: 10,
-                feedback: "La combinación de identidad local, comodidad e inclusión puede reforzar la personalidad del restaurante y atraer a distintas generaciones. Los criterios transparentes también favorecen un ambiente laboral más justo."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "otros_gastos", dinero: -2800 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 900 }
-                ],
-                reputacion: -4,
-                feedback: "Una imagen llamativa puede generar atención inicial, pero no garantiza fidelidad si el espacio no resulta cómodo o la experiencia del cliente no está cuidada. La organización del equipo también importa."
-            },
-            {
-                movimientos: [
-                    { categoria_pnl: "otros_gastos", dinero: -300 },
-                    { categoria_pnl: "ingresos_operativos", dinero: 400 }
-                ],
-                reputacion: -5,
-                feedback: "Has limitado la inversión, pero no revisar la organización del equipo puede generar desigualdades y conflictos. La tradición puede convivir con mejoras sencillas de comodidad y gestión."
-            }
+            { movimientos: [{ categoria_pnl: "otros_gastos", dinero: -1500 }, { categoria_pnl: "ingresos_operativos", dinero: 1200 }], reputacion: 8, feedback: "La agencia te ayuda a desarrollar un nombre coherente con la identidad de tu restaurante y su público. El apoyo profesional facilita la elección, aunque la inversión no garantiza por sí sola más ventas." },
+            { movimientos: [{ categoria_pnl: "otros_gastos", dinero: -200 }, { categoria_pnl: "ingresos_operativos", dinero: -500 }], reputacion: -4, feedback: "Has elegido rápido y con poco gasto, pero el gusto de tu primo no tiene por qué coincidir con lo que necesita el negocio. Un nombre poco adecuado puede dificultar la diferenciación y la conexión con el público." },
+            { movimientos: [{ categoria_pnl: "otros_gastos", dinero: -150 }, { categoria_pnl: "ingresos_operativos", dinero: 300 }], reputacion: 6, feedback: "Dedicar tiempo a pensar un nombre acorde con el restaurante te permite construir una identidad propia con una inversión pequeña. Ahorras dinero y puedes obtener un buen resultado si evalúas las opciones con criterio." }
         ]
-    }
+      }
+
   ];
 }
 
@@ -20908,6 +20913,26 @@ function advanceMonth() {
     }
 }
 
+function radixCuotaEscala2025(base, tramos) {
+    var cuota = 0, limiteAnterior = 0;
+    base = Math.max(0, Number(base) || 0);
+    for (var i = 0; i < tramos.length; i++) {
+        var limite = tramos[i][0];
+        cuota += Math.max(0, Math.min(base, limite) - limiteAnterior) * tramos[i][1];
+        if (base <= limite) break;
+        limiteAnterior = limite;
+    }
+    return cuota;
+}
+
+function radixCalcularIRPF2025(base) {
+    var estatal = [[12450,0.095],[20200,0.12],[35200,0.15],[60000,0.185],[300000,0.225],[Infinity,0.245]];
+    var canaria = [[13748,0.09],[19422,0.115],[35924,0.14],[57566,0.185],[93268,0.235],[123745,0.25],[Infinity,0.26]];
+    var cuotaEstatal = radixCuotaEscala2025(base, estatal) - radixCuotaEscala2025(5550, estatal);
+    var cuotaCanaria = radixCuotaEscala2025(base, canaria) - radixCuotaEscala2025(5606, canaria);
+    return Math.round((Math.max(0, cuotaEstatal) + Math.max(0, cuotaCanaria)) * 100) / 100;
+}
+
 function showYearlyForecast() {
     goTop();
     // CSS de impresión inyectado en el head (por si esta pantalla se alcanza sin haber pasado antes por el Canvas)
@@ -20926,11 +20951,24 @@ function showYearlyForecast() {
     }
 
     var impuestosAnuales = 0;
-    var nombreImpuesto = G.legalForm === 'sl' ? 'Impuesto sobre Sociedades (15%)' : 'IRPF estimado (20%)';
+    var nombreImpuesto = 'IRPF estimado 2025 (Canarias)';
+    if (G.legalForm === 'sl') {
+        nombreImpuesto = 'Impuesto sobre Sociedades 2025 (15%, entidad nueva)';
+        if (totalBeneficioBruto > 0) impuestosAnuales = Math.round(totalBeneficioBruto * 0.15 * 100) / 100;
+    } else if (G.legalForm === 'cb') {
+        // Supuesto didáctico: dos comuneros al 50 %, sin otros ingresos ni circunstancias familiares.
+        nombreImpuesto = 'IRPF estimado 2025 (2 comuneros, 50/50)';
+        if (totalBeneficioBruto > 0) impuestosAnuales = Math.round(radixCalcularIRPF2025(totalBeneficioBruto / 2) * 2 * 100) / 100;
+    } else if (totalBeneficioBruto > 0) {
+        impuestosAnuales = radixCalcularIRPF2025(totalBeneficioBruto);
+    }
     if (totalBeneficioBruto > 0) {
-        var tipoImpuesto = G.legalForm === 'sl' ? 0.15 : 0.20;
-        impuestosAnuales = Math.round(totalBeneficioBruto * tipoImpuesto * 100) / 100;
-        G.capital = G.capital - impuestosAnuales;
+        var porcentajeEfectivoImpuesto = impuestosAnuales / totalBeneficioBruto * 100;
+        nombreImpuesto += ' — ' + fmt(porcentajeEfectivoImpuesto) + '% efectivo';
+    }
+    if (!G.annualTaxApplied && impuestosAnuales > 0) {
+        G.capital -= impuestosAnuales;
+        G.annualTaxApplied = true;
     }
     var totalBeneficio = totalBeneficioBruto - impuestosAnuales;
 
@@ -20992,8 +21030,6 @@ function showYearlyForecast() {
     }
 
     // El impuesto anual también forma parte del desglose por categorías.
-    gastosChart.impuestos += impuestosAnuales;
-
     function radixTablaCategorias(items, totalLabel, total) {
         var html = '<div class="tw" style="margin-top:14px;overflow-x:auto"><table><thead><tr><th>Área</th><th style="text-align:right">Importe anual</th></tr></thead><tbody>';
         for (var i = 0; i < items.length; i++) {
@@ -21015,7 +21051,7 @@ function showYearlyForecast() {
         ['Personal y SS', gastosChart.personal], ['Alquiler', gastosChart.alquiler],
         ['Seguros', gastosChart.seguros], ['Otros Gastos', gastosChart.otros_gastos],
         ['Costos Financieros', gastosChart.costos_financieros]
-    ], 'Total gastos', totalGastos + impuestosAnuales);
+    ], 'Total gastos operativos', totalGastos);
 
     // Referencia: SMI 2026 (Canarias / resto de España) = 17.094 € brutos anuales
     var SMI_ANUAL = 17094;
@@ -21072,7 +21108,7 @@ function showYearlyForecast() {
       {key:'dificultades',label:'Con dificultades',emoji:'⚠️', col:'var(--dng)', desc:'Beneficio anual entre un 30% y un 10% por debajo del SMI'},
       {key:'arruinado', label:'Arruinado',         emoji:'💔', col:'#8B0000', desc:'Beneficio anual más de un 30% por debajo del SMI'}
     ];
-    var escaleraHTML = '<div class="cd"><div class="ci cio">🏅</div><h2>Clasificación</h2><p style="margin-bottom:14px">Aquí puedes ver todos los niveles posibles y dónde estás tú ahora mismo.</p>';
+    var escaleraHTML = '<div class="cd"><div class="ci cio">🏅</div><h2>Clasificación</h2><p style="margin-bottom:14px">Aquí puedes ver todos los resultados posibles y dónde estás tú ahora mismo.</p>';
     for(var n=0; n<nivelesData.length; n++){
       var nd = nivelesData[n];
       var isActive = nd.key === nivel;
@@ -21116,7 +21152,7 @@ function showYearlyForecast() {
          
     if (impuestosAnuales > 0) {
         h += '<tr>'+
-               '<td>Impuestos (' + (G.legalForm === 'sl' ? 'Sociedades 15%' : 'IRPF 20%') + ')</td>'+
+               '<td>' + nombreImpuesto + '</td>'+
                '<td>-</td>'+
                '<td style="color:var(--dng)">'+fmt(impuestosAnuales)+' €</td>'+
                '<td style="color:var(--dng);font-weight:bold">-'+fmt(impuestosAnuales)+' €</td>'+
@@ -21179,8 +21215,7 @@ function showYearlyForecast() {
     h +=
     '<div class="bc no-print" style="margin-top:32px;margin-bottom:36px;display:flex;flex-direction:column;align-items:center;gap:10px">'+
     '<div id="radix-pdf-status-prevision" role="status" aria-live="polite" style="display:none;text-align:center;max-width:620px"></div>'+
-    '<button id="radix-print-prevision" class="btn bs" onclick="radix7GenerarYGuardarPDF(&quot;01_Previsión_Anual.pdf&quot;,false)">🖨️ Imprimir resultado anual</button>'+
-    '<button id="radix-next-prevision" class="btn bp" style="display:none" onclick="goFinal()">📄 Ver Plan de Negocio</button>'+
+    '<button id="radix-next-prevision" class="btn bp" onclick="radix7ContinuarDesdeResultado()">📄 Continuar al plan de negocio</button>'+
     '</div>';
 
     area().innerHTML = h;
@@ -21414,41 +21449,41 @@ function radixModoAyuntamientoSolicitado(){
 
 function radixIniciarModoAyuntamiento(){
   var perfil={
-    name:'Ayuntamiento de Santa Cruz de Tenerife',gender:'nd',age:42,education:'FP Grado Medio',
+    name:'Ayuntamiento de Los Llanos de Aridane',gender:'nd',age:42,education:'FP Grado Medio',
     experience:'Más de 20 años como camarero en restaurantes y tabernas de Santa Cruz. Conozco el trato con el cliente, la sala, el servicio de vinos y el corte de jamón. Nunca he tenido mi propio negocio.',
     motivation:'Después de tantos años trabajando para otros quiero montar mi propia taberna, con el trato cercano y la calidad de las de toda la vida, para un público que valora la cocina canaria de siempre.',
-    dafo:['B','C','C','B','B'],bizType:'restauracion',bizTypeLabel:'Restauración',bizName:'La Taberna de la Rambla',
-    mainProduct:'Tapas y raciones de cocina canaria clásica, con jamón cortado a cuchillo y platos de cuchara',
+    dafo:['B','C','C','B','B'],bizType:'restauracion',bizTypeLabel:'Restauración',bizName:'La Taberna de la Plaza',
+    mainProduct:'Menú del día y raciones de cocina canaria y palmera, con jamón cortado a cuchillo',
     bizDesc:'Taberna pequeña de unas 28 plazas, con decoración cuidada y ambiente tranquilo. Cocina canaria tradicional: jamón, queso, pulpo, chipirones, conejo, carne de cabra y postres caseros. Servicio cercano y vinos de bodegas canarias.',
-    marketNeed:'En la zona hay pocos sitios cómodos y tranquilos para comer cocina canaria de calidad sin ir al centro turístico, con servicio atento y precios razonables.',
+    marketNeed:'En el Valle de Aridane falta un sitio tradicional y cómodo donde comer cocina palmera de calidad a un precio razonable, tanto a diario como en celebraciones familiares.',
     legalForm:'autonomo',legalFormLabel:'Autónomo',sectorExp:true,sectorTraining:true,
     objective:'Ser un sitio de referencia en el barrio con clientela fija y buenas reseñas, y cubrir costes y deuda al terminar el primer año.',
     mission:'Ofrecer cocina canaria de siempre con trato cercano en un ambiente cómodo y elegante.',
     vision:'Ser la taberna de confianza del barrio, conocida por su jamón, su producto local y su servicio.',
-    targetDesc:'Personas de 50 años en adelante, residentes de la zona, con poder adquisitivo medio-alto: matrimonios, grupos de amigos, familias que celebran comidas y jubilados con buen nivel de vida. Buscan comer bien y con calma.',
-    targetAge:'50-65 años',targetType:'residente',targetZone:'local',targetIncome:'medio',
-    targetNeeds:'Quiere calidad y buen trato, un local tranquilo con poco ruido, platos reconocibles y raciones bien servidas. Le frustran las esperas y los sitios masificados. Valora poder reservar por teléfono y que lo conozcan.',
+    targetDesc:'Vecinos y trabajadores de Los Llanos, Tazacorte y El Paso, de 35 a 50 años, con poder adquisitivo medio: trabajadores de comercios y oficinas, parejas y familias con hijos que quieren comer bien sin gastar mucho.',
+    targetAge:'35-50 años',targetType:'residente',targetZone:'local',targetIncome:'medio',
+    targetNeeds:'Busca precio ajustado, menú claro y raciones generosas. Valora la rapidez a mediodía y un ambiente tranquilo para comer en familia o con amigos. Reserva por WhatsApp o teléfono.',
     igEvent:'B',locationType:'fisico',locationZone:'Los Llanos de Aridane',localType:'alquiler',reformLevel:'parcial',
     reformCost:9000,reformCostInput:9000,furniture:'Mesas y sillas para 28 plazas, barra con soporte para jamón, cámara de frío, bodega de vinos, cocina de 4 fuegos, plancha, freidora, campana, lavavajillas, vajilla y cristalería, TPV y decoración.',
-    locationChoice:'B',monthlyRent:1300,workAlone:false,numWorkers:3,workerSalary:1300,ownSalary:1500,
+    locationChoice:'B',monthlyRent:900,workAlone:false,numWorkers:3,workerSalary:1300,ownSalary:1500,
     schedule:'Partido (9-14h / 17-21h)',trainingNeeded:'Manipulador de alimentos, APPCC, alérgenos, corte de jamón, maridaje de vinos y atención a clientes mayores.',
     hiringChoice:'A',hiringEventCost:1729,doMarketing:true,marketingBudget:250,
     openingPromo:'Primera semana con copa de vino canario de cortesía con cada ración de jamón, y una cata para los vecinos el día de la inauguración.',
-    collabs:'Bodegas canarias, queserías, carnicerías locales, asociaciones de vecinos y centros de mayores del barrio.',marketingChoice:'D',mktInitialCost:300,
+    collabs:'Comercios y oficinas del centro de Los Llanos (menú para empresas), bodegas y queserías de La Palma, y asociaciones de vecinos y deportivas del Valle.',marketingChoice:'D',mktInitialCost:300,
     ownMoney:22000,financingType:'prestamo',loanAmount:18000,loanInterest:6,loanMonths:60,loanPayment:347.99,
-    expenses:{rent:1300,deposit:2600,reform:9000,furniture:6000,supplies:500,legal:2000,machinery:8500,software:700,marketing:500,cushion:4500,contingency:2000},
-    totalInvestment:31100,crisisChoice:'B',capital:6871,
-    fixedCosts:{rent:1300,advisory:90,insurance:80,telecom:60,ads:250,loan:347.99,wages:3900,ssEmployees:1194},
-    variableCosts:{supplies:6100,transport:60,commissions:300,utilities:600,misc:250},
-    ssCost:88.56,ssEmployees:1194,totalFixed:7310.55,totalVariable:7310,
-    monthlySales:650,avgPrice:26.5,monthlyRevenue:17225,monthlyProfit:2604.45,profitMargin:10.1,breakEven:552,heatChoice:'A',
+    expenses:{rent:900,deposit:1800,reform:9000,furniture:6000,supplies:500,legal:2000,machinery:8500,software:700,marketing:500,cushion:4500,contingency:2000},
+    totalInvestment:29900,crisisChoice:'B',capital:8071,
+    fixedCosts:{rent:900,advisory:90,insurance:80,telecom:60,ads:250,loan:347.99,wages:3900,ssEmployees:1194},
+    variableCosts:{supplies:5800,transport:60,commissions:300,utilities:600,misc:250},
+    ssCost:88.56,ssEmployees:1194,totalFixed:6910.55,totalVariable:7010,
+    monthlySales:870,avgPrice:19,monthlyRevenue:16530,monthlyProfit:2609.45,profitMargin:15.79,breakEven:733,heatChoice:'A',
     legal:{alta:'si',igic:'si',contracts:'si',licenses:'si',lopd:'si',prl:'si'},
     sustainable:'Proveedores canarios de kilómetro 0, carta de temporada, vajilla reutilizable y envases compostables para llevar.',
     envImpact:'Residuos de cocina y aceite usado. Separación de residuos, recogida por gestor autorizado, iluminación LED y equipos de bajo consumo.',
-    localEmploy:'si',digitalize:'parcial'
+    localEmploy:'si',digitalize:'si'
   };
   Object.keys(perfil).forEach(function(k){G[k]=perfil[k];});
-  var etiqueta=document.querySelector('header .flg');if(etiqueta)etiqueta.textContent='🏛️ Ayuntamiento de Santa Cruz de Tenerife';
+  var etiqueta=document.querySelector('header .flg');if(etiqueta)etiqueta.textContent='🏛️ Ayuntamiento de Los Llanos de Aridane';
   var pie=document.querySelector('.ft p');if(pie)pie.textContent='Simulador Del Emprendimiento Radix — Los Llanos de Aridane, La Palma 🇮🇨';
   G.turn=0;G.capital=0;G.reputation=50;G.bar=50;G.decisions=[];G.radixFormDrafts={};
   function draft(fields,options){
